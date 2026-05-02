@@ -33,27 +33,13 @@ print(f"✅ Agent ID: {AGENT_ID}")
 # ========================= LOGGING =========================
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO, the re
- e:
-      )
-logger  logger.error(= logging.getLogger(__name__)
-        await context.
-.send_message(chat_id=chat_id, text=#Sorry, somethin  went wrong. Pleas= try again.")
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-== ========================= MAIN =========================
-def main= -> None:
-  === """Start the Telegram bot with poll=."""
-  === try:
-        app = Application.buil=().token===TELEGRAM_TOKEN).bu=()
-        ap========.add_handler= MESSAGE Handler(filters.TEXT & ~filters.COMMAHAND_message))
-
-        loLER ==.info("= is starting...")
-      === print("🤖 = is running an=== listening for messages...")
-    ====== app.ru====ing(poll_interval=1.0)
-
-    except Exception as=====
+# ========================= MESSAGE HANDLER =========================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming Telegram messages and send to Letta agent. thi""" GitHub, and te
+    """Handle incoming Telegram messages and send to Letta agent."""
     if not update.message or not update.message.text:
         return
 
@@ -73,7 +59,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "input": user_message
         }
 
-        # FIXED: Added /v1/ prefix (was missing, caused 404 errors)
+        # FIXED: Added /v1/ prefix
         url = f"{LETTA_API_BASE_URL}/v1/agents/{AGENT_ID}/messages"
         response = requests.post(url, json=payload, headers=headers, timeout=30)
 
@@ -100,9 +86,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     except requests.exceptions.Timeout:
         logger.error(f"❌ Request timeout")
-        await context.bot.send_message(chat_id=chat_id, text="Sorryquest timed out. Please try again.")
-    except Exception as f"❌ Error processing message: {e}")
-bot"ge#() ing der(ildp(MessageND, handlegger🤖 Bot Botd   n_poll e:
+        await context.bot.send_message(chat_id=chat_id, text="Sorry, the request timed out. Please try again.")
+    except Exception as e:
+        logger.error(f"❌ Error processing message: {e}")
+        await context.bot.send_message(chat_id=chat_id, text="Sorry, something went wrong. Please try again.")
+
+# ========================= MAIN =========================
+def main() -> None:
+    """Start the Telegram bot with polling."""
+    try:
+        app = Application.builder().token(TELEGRAM_TOKEN).build()
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+        logger.info("🤖 Bot is starting...")
+        print("🤖 Bot is running and listening for messages...")
+        app.run_polling(poll_interval=1.0)
+
+    except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
         sys.exit(1)
 
