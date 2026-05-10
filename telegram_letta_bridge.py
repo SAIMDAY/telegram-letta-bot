@@ -1,19 +1,23 @@
 import os
 import sys
 import time
+import json
 import logging
+import threading
 import requests as http_requests
 from typing import Final
 
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from flask import Flask, request as flask_request, jsonify
 
 # ========================= CONFIG =========================
 TELEGRAM_TOKEN: Final[str] = os.getenv("TELEGRAM_TOKEN")
 LETTA_API_KEY: Final[str] = os.getenv("LETTA_API_KEY")
 AGENT_ID: Final[str] = os.getenv("AGENT_ID")
 LETTA_API_BASE_URL: Final[str] = os.getenv("LETTA_API_BASE_URL", "https://api.letta.com")
-GMAIL_CHAT_ID: Final[str] = os.getenv("GMAIL_CHAT_ID")  # David's Telegram chat ID
+GMAIL_CHAT_ID: Final[str] = os.getenv("GMAIL_CHAT_ID")
+NOTIFY_SECRET: Final[str] = os.getenv("NOTIFY_SECRET", "")  # Optional auth for /notify
 
 # ========================= VALIDATION =========================
 missing_vars = []
@@ -39,7 +43,71 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ========================= MESSAGE HANDLER =========================
+# ========================= FLASK APP (notify endpoint) =========================
+flask_app = Flask(__name__)
+
+# Shared reference to the bot instance (set after application starts)
+bot_instance = None
+
+@flask_app.route("/notify", methods=["POST"])
+def notify():
+    """Send a proactive message to David via Telegram.
+    
+    POST /notify
+    Body: {"text": "message to send"} or {"text": "...", "chat_id": "optional_override"}
+    Headers: Authorization: Bearer <NOTIFY_SECRET> (if NOTIFY_SECRET is set)
+    """
+    global bot_instance
+    
+    # Auth check
+    if NOTIFY_SECRET:
+        auth = flask_request.headers.get("Authorization", "")
+        if auth != f"Bearer {NOTIFY_SECRET}":
+            return jsonify({"error": "unauthorized"}), 401
+    
+    data = flask_request.get_json(silent=True) or {}
+    text = data.get("text", "")
+    chat_id = data.get("chat_id", GMAIL_CHAT_ID)
+    
+    if not text:
+        return jsonify({"error": "missing 'text' field"}), 400
+    
+    if not chat_id:
+        return jsonify({"error": "no chat_id configured"}), 500
+    
+    # Send via Telegram Bot API directly (works even if polling loop is busy)
+    try:
+        resp = http_requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            logger.info(f"Notify sent to {chat_id}: {text[:80]}")
+            return jsonify({"status": "sent", "chat_id": chat_id}), 200
+        else:
+            logger.error(f"Notify failed: {resp.status_code} {resp.text[:200]}")
+            return jsonify({"error": f"telegram api error: {resp.status_code}"}), 502
+    except Exception as e:
+        logger.error(f"Notify exception: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@flask_app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
+def run_flask():
+    """Run Flask in a separate thread for the notify endpoint."""
+    flask_app.run(host="0.0.0.0", port=8080, use_reloader=False)
+
+
+# Start Flask in background thread
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+logger.info("Notify endpoint running on port 8080")
+
+# ========================= TELEGRAM MESSAGE HANDLER =========================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming Telegram messages and send to Letta agent."""
     if not update.message or not update.message.text:
